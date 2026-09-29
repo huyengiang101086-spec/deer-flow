@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.channels.discord import DiscordChannel
+from app.channels.discord import _DISCORD_MAX_MESSAGE_LEN, DiscordChannel
 from app.channels.manager import CHANNEL_CAPABILITIES
 from app.channels.message_bus import InboundMessage, InboundMessageType, MessageBus, OutboundMessage, ResolvedAttachment
 from app.channels.service import _CHANNEL_REGISTRY
@@ -650,3 +650,35 @@ async def test_send_control_calls_keep_the_default_outbound_bound() -> None:
     assert len(run_mock.await_args_list) == 2  # stop_typing + one text chunk
     for call in run_mock.await_args_list:
         assert "timeout" not in call.kwargs
+
+
+def test_split_text_round_trips_a_long_reply() -> None:
+    """The bubbles sent one after another must rebuild the original text exactly."""
+    text = "x" * (_DISCORD_MAX_MESSAGE_LEN - 10) + "\n\n" + "y" * 30
+
+    chunks = DiscordChannel._split_text(text)
+
+    assert len(chunks) > 1
+    assert all(len(chunk) <= _DISCORD_MAX_MESSAGE_LEN for chunk in chunks)
+    assert "".join(chunks) == text
+
+
+def test_split_text_keeps_every_boundary_newline() -> None:
+    """A paragraph break at a split point is content, not a separator to discard."""
+    text = ("第一段\n\n" + "句" * 1990 + "\n\n最后一段") * 3
+
+    chunks = DiscordChannel._split_text(text)
+
+    assert len(chunks) > 1
+    assert all(len(chunk) <= _DISCORD_MAX_MESSAGE_LEN for chunk in chunks)
+    assert "".join(chunks) == text
+
+
+def test_split_text_hard_cut_without_a_newline_preserves_content() -> None:
+    """With no newline in the window the hard cut still loses nothing."""
+    text = "字" * (_DISCORD_MAX_MESSAGE_LEN * 2 + 5)
+
+    chunks = DiscordChannel._split_text(text)
+
+    assert all(len(chunk) <= _DISCORD_MAX_MESSAGE_LEN for chunk in chunks)
+    assert "".join(chunks) == text
