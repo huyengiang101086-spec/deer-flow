@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -46,6 +47,16 @@ class BrowserlessClient:
         unknown keys, so the token must never be sent in the JSON body.
         """
         return {"token": self.token} if self.token else None
+
+    async def _open_client(self) -> httpx.AsyncClient:
+        """Build the HTTP client off the event loop.
+
+        ``httpx.AsyncClient`` loads the TLS trust store synchronously while it is
+        constructed (``ssl.SSLContext.load_verify_locations`` reads the CA bundle).
+        Building it inside the request coroutine therefore stalls every other task
+        sharing the Gateway event loop; the request itself stays asynchronous.
+        """
+        return await asyncio.to_thread(httpx.AsyncClient, timeout=self.timeout_s)
 
     async def fetch_html(
         self,
@@ -142,7 +153,7 @@ class BrowserlessClient:
 
         logger.debug(f"Fetching URL via Browserless: {url}")
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_s) as client:
+            async with await self._open_client() as client:
                 resp = await client.post(
                     f"{self.base_url}/content",
                     json=payload,
@@ -232,7 +243,7 @@ class BrowserlessClient:
 
         logger.debug(f"Capturing URL screenshot via Browserless: {url}")
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_s) as client:
+            async with await self._open_client() as client:
                 resp = await client.post(
                     f"{self.base_url}/screenshot",
                     json=payload,
